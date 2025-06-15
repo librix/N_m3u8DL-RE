@@ -1,0 +1,137 @@
+name: Build Latest
+
+on:
+  workflow_dispatch:
+    inputs:
+      doRelease:
+        description: 'Publish new release'
+        type: boolean
+        default: false
+        required: false
+      tag:
+        type: string
+        description: 'Release version tag (e.g. v0.2.1-beta)'
+        required: true
+      ref:
+        type: string
+        description: 'Git ref from which to release'
+        required: true
+        default: 'main'
+
+env:
+  DOTNET_SDK_VERSION: "9.0.*"
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
+jobs:
+  set-date:
+    runs-on: ubuntu-latest
+    outputs:
+      date: ${{ steps.get_date.outputs.date }}
+      tag: ${{ steps.format_tag.outputs.tag }}
+    steps:
+      - name: Get Date in UTC+8
+        id: get_date
+        run: |
+          DATE=$(date -u -d '8 hours' +'%Y%m%d')
+          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+
+      - name: Determine Tag
+        id: format_tag
+        run: |
+          if [ "${{ github.event.inputs.doRelease }}" == "true" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="actions-$GITHUB_RUN_ID"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+  build-win-nt6_0-x86:
+    runs-on: windows-latest
+    needs: set-date
+
+    steps:
+      - uses: actions/checkout@v1
+
+      - name: Install zip
+        run: choco install zip --no-progress --yes
+
+      - name: Set up dotnet
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
+
+      - run: powershell -Command "(Get-Content src/N_m3u8DL-RE/N_m3u8DL-RE.csproj) -replace '<TargetFramework>.*</TargetFramework>', '<TargetFramework>net9.0-windows</TargetFramework>' | Set-Content src/N_m3u8DL-RE/N_m3u8DL-RE.csproj"
+      - run: dotnet add src/N_m3u8DL-RE/N_m3u8DL-RE.csproj package YY-Thunks --version 1.1.4
+      - run: dotnet add src/N_m3u8DL-RE/N_m3u8DL-RE.csproj package VC-LTL --version 5.1.1
+      - run: dotnet publish src/N_m3u8DL-RE -p:TargetPlatformMinVersion=6.0 -r win-x86 -c Release -o artifact-x86
+
+      - name: Package [win-x86]
+        run: |
+          cd artifact-x86
+          zip ../N_m3u8DL-RE_${{ needs.set-date.outputs.tag }}_win-NT6.0-x86_${{ needs.set-date.outputs.date }}.zip N_m3u8DL-RE.exe
+
+      - name: Upload Artifact[win-x86]
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-NT6.0-x86
+          path: N_m3u8DL-RE_${{ needs.set-date.outputs.tag }}_win-NT6.0-x86_${{ needs.set-date.outputs.date }}.zip
+
+  build-win-x64-arm64:
+    runs-on: windows-latest
+    needs: set-date
+
+    steps:
+      - uses: actions/checkout@v1
+
+      - name: Install zip
+        run: choco install zip --no-progress --yes
+
+      - name: Set up dotnet
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
+
+      - run: dotnet publish src/N_m3u8DL-RE -r win-x64 -c Release -o artifact-x64
+      - run: dotnet publish src/N_m3u8DL-RE -r win-arm64 -c Release -o artifact-arm64
+
+      - name: Package [win]
+        run: |
+          cd artifact-x64
+          zip ../N_m3u8DL-RE_${{ needs.set-date.outputs.tag }}_win-x64_${{ needs.set-date.outputs.date }}.zip N_m3u8DL-RE.exe
+          cd ../artifact-arm64
+          zip ../N_m3u8DL-RE_${{ needs.set-date.outputs.tag }}_win-arm64_${{ needs.set-date.outputs.date }}.zip N_m3u8DL-RE.exe
+
+      - name: Upload Artifact [win-x64]
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-x64
+          path: N_m3u8DL-RE_${{ needs.set-date.outputs.tag }}_win-x64_${{ needs.set-date.outputs.date }}.zip
+
+      - name: Upload Artifact [win-arm64]
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-arm64
+          path: N_m3u8DL-RE_${{ needs.set-date.outputs.tag }}_win-arm64_${{ needs.set-date.outputs.date }}.zip
+
+  create_release:
+    name: Create release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: ${{ github.event.inputs.doRelease == 'true' }}
+    needs: [set-date,build-win-nt6_0-x86,build-win-x64-arm64]
+    
+    steps:
+      - name: Fetch artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.event.inputs.tag }}
+          name: N_m3u8DL-RE_${{ github.event.inputs.tag }}
+          artifacts: "android-bionic-x64/*,android-bionic-arm64/*,linux-x64/*,linux-arm64/*,linux-musl-x64/*,linux-musl-arm64/*,osx-x64/*,osx-arm64/*,win-x64/*,win-arm64/*,win-NT6.0-x86/*"
+          draft: false
+          allowUpdates: true
+          generateReleaseNotes: true
+          discussionCategory: 'Announcements'
